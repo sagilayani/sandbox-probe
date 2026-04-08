@@ -33,10 +33,9 @@ const BANNER_HTML = `
     background:repeating-linear-gradient(0deg,transparent,transparent 2px,#fff 2px,#fff 3px);
     pointer-events:none;"></div>
 
-  <div style="animation:pulse 2s ease-in-out infinite;margin-bottom:24px">
-    <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="#ff4444" stroke-width="1.5">
-      <path d="M12 9v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-    </svg>
+  <div style="margin-bottom:24px">
+    <img src="https://cybersecurity-excellence-awards.com/wp-content/uploads/255242.png"
+      style="height:80px;object-fit:contain;filter:drop-shadow(0 0 20px rgba(0,221,255,0.3))" alt="Oasis Security">
   </div>
 
   <h1 style="font-size:42px;font-weight:700;margin:0 0 8px;letter-spacing:-1px;
